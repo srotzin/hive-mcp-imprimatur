@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * hive-mcp-imprimatur — Imprimatur pre-attestation gate MCP Server
+ * hive-mcp-imprimatur: Imprimatur pre-attestation gate MCP Server
  *
  * Every other Hive primitive signs a receipt AFTER the model runs. Imprimatur
  * signs a clearance BEFORE it runs: four compliance pre-conditions are checked
@@ -27,7 +27,7 @@
 import express from 'express';
 
 const SERVICE      = 'hive-mcp-imprimatur';
-const VERSION      = '1.0.0';
+const VERSION      = '1.1.0';
 const PORT         = process.env.PORT || 3000;
 const ENABLE       = (process.env.ENABLE ?? 'true') !== 'false';
 const BRAND_GOLD   = '#C08D23';
@@ -35,6 +35,29 @@ const IMPR_BASE    = process.env.HIVE_IMPRIMATUR_URL || 'https://hive-passport.o
 const INFO_PATH    = '/v1/imprimatur/info';
 const GATE_PATH    = '/v1/imprimatur/gate';
 const PUBKEY_PATH  = '/v1/prov/pubkey';
+
+// ─── Environment validation (fail closed) ──────────────────────────────────
+function validateEnv() {
+  const errors = [];
+  try {
+    const u = new URL(IMPR_BASE);
+    if (!/^https?:$/.test(u.protocol)) errors.push(`HIVE_IMPRIMATUR_URL must be http(s): got "${IMPR_BASE}"`);
+  } catch {
+    errors.push(`HIVE_IMPRIMATUR_URL is not a valid URL: "${IMPR_BASE}"`);
+  }
+  const portNum = Number(PORT);
+  if (!Number.isInteger(portNum) || portNum <= 0 || portNum > 65535) {
+    errors.push(`PORT must be a valid TCP port: got "${PORT}"`);
+  }
+  return errors;
+}
+
+const ENV_ERRORS = validateEnv();
+if (ENV_ERRORS.length > 0) {
+  console.error(`[${SERVICE}] FATAL: invalid environment, refusing to start:`);
+  for (const e of ENV_ERRORS) console.error(`  - ${e}`);
+  process.exit(1);
+}
 
 async function callUpstream(path, { method = 'GET', body = null } = {}) {
   const opts = { method, headers: { 'Origin': 'https://thehiveryiq.com' }, signal: AbortSignal.timeout(30_000) };
@@ -58,7 +81,7 @@ const TOOLS = [
   },
   {
     name: 'gate',
-    description: 'Enforce the gate on an inference call (free, public, no secret). Present the clearance an inference is carrying and Imprimatur returns ALLOW if it is valid and unexpired, or REFUSE if it is missing, tampered, expired, or does not match. An uncleared call is refused — that refusal is the control. Pass {clearance} (the signed clearance object the call presents) and optionally {now} (ISO timestamp). Returns {decision, reason, note}.',
+    description: 'Enforce the gate on an inference call (free, public, no secret). Present the clearance an inference is carrying and Imprimatur returns ALLOW if it is valid and unexpired, or REFUSE if it is missing, tampered, expired, or does not match. An uncleared call is refused; that refusal is the control. LIMITATION: ALLOW is a live server-side decision, not an offline-checkable proof: a caller cannot independently re-derive or verify an ALLOW without calling this upstream gate; only REFUSE-by-absence (no clearance presented) is trivially and universally true. Pass {clearance} (the signed clearance object the call presents) and optionally {now} (ISO timestamp). Returns {decision, reason, note}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -69,7 +92,7 @@ const TOOLS = [
   },
   {
     name: 'verify_clearance',
-    description: 'Verify a presented clearance offline-style (free, no secret). Runs the gate verification path: checks the Ed25519 signature against the published issuer key, re-derives the precond_root, confirms the assertion discipline (pre_clearance_conditions_met, asserts_legal:false), and checks expiry. Returns the gate decision and reason. Pass {clearance}.',
+    description: 'Ask the live Imprimatur gate to evaluate a presented clearance (free, no secret). IMPORTANT LIMITATION: this is NOT an offline/local verification. The ALLOW/REFUSE decision can only be produced by calling the upstream issuer (it holds the current precondition state, revocation status, and expiry clock), so this tool makes a live network call to the same gate endpoint as the `gate` tool and reports its answer. There is no cryptographic proof a caller can check locally that would let them independently confirm ALLOW without trusting this live call; unlike SiGR receipts, an Imprimatur ALLOW is not self-certifying. What IS independently checkable offline is the Ed25519 transport signature Hive Passport attaches to every HTTP response (X-Hive-Prov-Sig headers over pubkey /v1/prov/pubkey); that only proves the response body was not altered in transit, not that the ALLOW decision is externally re-derivable. Pass {clearance}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -100,14 +123,14 @@ async function executeTool(name, args) {
   if (name === 'verify_clearance') {
     if (!args.clearance || typeof args.clearance !== 'object') throw new Error('Provide a "clearance" object to verify.');
     const { data } = await callUpstream(GATE_PATH, { method: 'POST', body: { clearance: args.clearance } });
-    const verified = data && data.decision === 'ALLOW';
+    const allowed = data && data.decision === 'ALLOW';
     return { type: 'text', text: JSON.stringify({
-      verified,
       decision: data?.decision,
       reason: data?.reason,
-      note: verified
-        ? 'Clearance verified — signature, precond_root, discipline, and expiry all pass.'
-        : 'Clearance did not verify — see reason. An uncleared or invalid call is refused.',
+      note: allowed
+        ? 'Upstream returned ALLOW for this clearance right now.'
+        : 'Upstream returned REFUSE, see reason. An uncleared or invalid call is refused.',
+      verification_limitation: 'This result comes from a live call to the upstream Imprimatur gate, not from an offline cryptographic check performed here. ALLOW/REFUSE depends on server-side state (current preconditions, revocation, expiry clock) that a caller cannot independently re-derive from public data alone. Do not treat this tool\'s output as an externally provable, offline-verifiable proof of ALLOW; it is only as trustworthy as the live upstream call that produced it.',
       assertion: 'pre_clearance_conditions_met',
       does_not_assert: 'legal',
     }, null, 2) };
@@ -134,6 +157,7 @@ app.get('/', (_req, res) => res.json({
   preconditions: ['model_approved', 'inputs_eligible', 'context_permitted', 'boundary_authorized'],
   assertion: 'pre_clearance_conditions_met',
   does_not_assert: 'legal',
+  verification_limitation: 'ALLOW decisions are produced live by the upstream issuer and are not externally/offline provable by a caller. Only the upstream Ed25519 transport signature on each HTTP response is offline-checkable, and it proves transport integrity, not that a given ALLOW is independently re-derivable.',
   settlement: { currency: 'USDC', chain: 'Base' },
   brand_color: BRAND_GOLD,
 }));
@@ -197,5 +221,10 @@ app.get('/.well-known/agent.json', (_req, res) => res.json({
   brand_color: BRAND_GOLD,
 }));
 
-if (!ENABLE) console.log(`[${SERVICE}] ENABLE=false — dormant (health only)`);
+// Honest 404: no fabricated success on unknown routes.
+app.use((req, res) => {
+  res.status(404).json({ error: 'not_found', path: req.path, service: SERVICE });
+});
+
+if (!ENABLE) console.log(`[${SERVICE}] ENABLE=false (dormant, health only)`);
 app.listen(PORT, () => console.log(`[${SERVICE}] v${VERSION} listening on :${PORT} -> ${IMPR_BASE}`));

@@ -1,12 +1,12 @@
 {
   "name": "io.github.srotzin/hive-mcp-imprimatur",
-  "description": "Imprimatur pre-attestation gate — a signed clearance bound to an inference before it runs; an uncleared call is refused.",
-  "version": "1.0.0",
+  "description": "Imprimatur pre-attestation gate: a signed clearance bound to an inference before it runs; an uncleared call is refused.",
+  "version": "1.1.0",
   "packages": [
     {
       "registry_type": "npm",
       "identifier": "hive-mcp-imprimatur",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "transport": { "type": "streamable-http" }
     }
   ],

@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: hive-mcp-imprimatur
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev --no-audit --no-fund
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HIVE_IMPRIMATUR_URL
+        value: https://hive-passport.onrender.com
+      - key: ENABLE
+        value: "true"
+    healthCheckPath: /health
+    autoDeploy: true

@@ -1,7 +1,7 @@
 {
   "name": "hive-mcp-imprimatur",
-  "version": "1.0.0",
-  "description": "Imprimatur pre-attestation gate MCP server — a signed clearance bound to an inference before it runs; an uncleared call is refused. Asserts policy, never legality. Patent Pending. Hive Civilization.",
+  "version": "1.1.0",
+  "description": "Imprimatur pre-attestation gate MCP server: a signed clearance bound to an inference before it runs; an uncleared call is refused. Asserts policy, never legality. Patent Pending. Hive Civilization.",
   "type": "module",
   "main": "server.js",
   "bin": { "hive-mcp-imprimatur": "server.js" },
