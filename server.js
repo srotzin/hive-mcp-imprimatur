@@ -62,13 +62,24 @@ if (ENV_ERRORS.length > 0) {
 async function callUpstream(path, { method = 'GET', body = null } = {}) {
   const opts = { method, headers: { 'Origin': 'https://thehiveryiq.com' }, signal: AbortSignal.timeout(30_000) };
   if (body != null) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-  const r = await fetch(`${IMPR_BASE}${path}`, opts);
-  const text = await r.text();
-  let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
-  if (!r.ok && r.status !== 401 && r.status !== 403) {
-    // gate REFUSE comes back 200; only treat hard upstream errors as throws
-    if (r.status >= 500) throw new Error(`upstream ${path} -> ${r.status}: ${text.slice(0, 300)}`);
+  let r;
+  try {
+    r = await fetch(`${IMPR_BASE}${path}`, opts);
+  } catch (err) {
+    throw new Error(`upstream ${path} unreachable: ${err?.message || err}`);
   }
+  const text = await r.text();
+  // Fail closed on every non-2xx. A gate REFUSE is a documented, verified
+  // live behavior of this upstream and comes back as HTTP 200 with
+  // {decision:"REFUSE", reason, note} in the body, never as a 401/403; on
+  // this deployment a 401 is what an unknown/misrouted path returns, so
+  // treating 401/403 as an implicit REFUSE silently passed through real
+  // upstream errors as if they were valid tool results. There is no
+  // legitimate non-2xx REFUSE signal to special-case here.
+  if (!r.ok) throw new Error(`upstream ${path} -> ${r.status}: ${text.slice(0, 300)}`);
+  if (text === '') throw new Error(`upstream ${path} -> ${r.status}: empty body`);
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error(`upstream ${path} -> ${r.status}: non-JSON body`); }
   return { status: r.status, data };
 }
 
@@ -227,4 +238,12 @@ app.use((req, res) => {
 });
 
 if (!ENABLE) console.log(`[${SERVICE}] ENABLE=false (dormant, health only)`);
-app.listen(PORT, () => console.log(`[${SERVICE}] v${VERSION} listening on :${PORT} -> ${IMPR_BASE}`));
+
+// Only bind a port when this file is run directly (node server.js), not when
+// it is imported as a module, for example from the test suite.
+const isMain = import.meta.url === `file://${process.argv[1]}`;
+if (isMain) {
+  app.listen(PORT, () => console.log(`[${SERVICE}] v${VERSION} listening on :${PORT} -> ${IMPR_BASE}`));
+}
+
+export default app;
